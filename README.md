@@ -2,7 +2,7 @@
 
 A self-contained vocabulary and punctuation practice quiz. Single HTML file — no build step, no dependencies beyond a browser.
 
-**[Open the quiz](./vocab_punctuation_quiz.html)** *(once hosted, replace this with your actual GitHub Pages URL, e.g. `https://yourusername.github.io/vocab-quiz/vocab_punctuation_quiz.html`)*
+**[Open the quiz](https://r7d2jzv2g8-dot.github.io/vocab-quiz/)** 
 
 ---
 
