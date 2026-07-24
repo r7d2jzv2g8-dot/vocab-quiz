@@ -69,6 +69,7 @@
   .dash-game-btn { flex: 1; background: var(--surface-raised); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 11px 0; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
 
   /* ---------- Crossword ---------- */
+  .cw-current-clue { background: var(--surface-raised); border-left: 3px solid var(--weak-color); border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; font-size: 13.5px; line-height: 1.5; min-height: 20px; }
   .cw-grid { display: grid; gap: 2px; margin: 0 auto 16px; max-width: 340px; background: var(--border); border: 2px solid var(--border); }
   .cw-cell { position: relative; aspect-ratio: 1; background: var(--surface); }
   .cw-cell-blocked { background: var(--bg); }
@@ -98,7 +99,7 @@
   .header-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
   .header-title { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; color: var(--text-muted); text-transform: uppercase; }
   .header-count { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-muted); }
-  .header-right { display: flex; align-items: center; gap: 14px; }
+  .header-status-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   .header-exit { font-family: 'Inter', sans-serif; font-size: 12.5px; color: var(--text-muted); cursor: pointer; }
   .header-exit:hover { color: var(--text); }
   .tally { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; }
@@ -231,6 +232,8 @@
 <body>
 <div class="app" id="app"></div>
 <script>
+
+
 
 
 
@@ -591,7 +594,7 @@ function renderHeader() {
   const answeredSoFar = state.i + (state.answered ? 1 : 0);
   const incorrectSoFar = answeredSoFar - state.score;
   const tally = answeredSoFar > 0 ? `<span class="tally"><span class="tally-correct">&#10003; ${state.score}</span> <span class="tally-incorrect">&#10007; ${incorrectSoFar}</span></span>` : "";
-  return `<div class="header"><div class="header-top"><div class="header-title">${label}</div><div class="header-right">${tally}<span class="header-exit" onclick="restart()" role="button" tabindex="0">&larr; Dashboard</span><div class="header-count">Round ${state.i + 1} of ${total}</div></div></div><div class="progress-bar"><div class="${fillClass}" style="width:${pct}%;"></div></div></div>`;
+  return `<div class="header"><div class="header-top"><div class="header-title">${label}</div><span class="header-exit" onclick="restart()" role="button" tabindex="0">&larr; Dashboard</span></div><div class="header-status-row"><div class="header-count">Round ${state.i + 1} of ${total}</div>${tally}</div><div class="progress-bar"><div class="${fillClass}" style="width:${pct}%;"></div></div></div>`;
 }
 
 function renderWordBlock(w, revealDef) {
@@ -1025,11 +1028,63 @@ function crosswordSelectCell(row, col) {
   // Deliberately no render() here. Re-rendering the grid the instant a cell
   // receives focus would destroy and recreate that same input immediately
   // -- the same failure mode that broke typing, just one step earlier.
-  // Update only the two things that actually need to change, directly.
+  // Update only the things that actually need to change, directly.
   const btn = document.getElementById("cw-reveal-letter-btn");
   if (btn) btn.disabled = false;
   const hint = document.getElementById("cw-hint-note");
   if (hint) hint.textContent = "Tap \u201cReveal letter\u201d to fill the selected square.";
+  const clueBar = document.getElementById("cw-current-clue");
+  if (clueBar) clueBar.textContent = getCurrentClueText();
+}
+// Shared by crosswordSelectCell (direct DOM update, no re-render, so typing
+// and auto-advance stay reliable) and renderCrossword (initial paint) --
+// keeping this in one place means the two can't drift out of sync.
+function getCurrentClueText() {
+  const { puzzle, downClues, selected, direction, acrossNumber } = crosswordState;
+  if (!selected) return "Tap a square to see its clue here.";
+  if (direction === "across") return `${acrossNumber} Across: ${puzzle.spineDef}`;
+  const activeDown = downClues.find(d => d.col === selected.col);
+  return activeDown ? `${activeDown.number} Down: ${activeDown.def}` : "Tap a square to see its clue here.";
+}
+// Every word in the puzzle -- the single across spine plus each down word --
+// as an ordered list of its own cells, sorted by clue number. Used to find
+// "the next word" when the player finishes typing the current one.
+function getAllCrosswordWords() {
+  const { compiled, downClues, acrossNumber } = crosswordState;
+  const words = [];
+  const acrossCells = [];
+  for (let c = 0; c < compiled.width; c++) acrossCells.push([compiled.spineRow, c]);
+  words.push({ number: acrossNumber, direction: "across", cells: acrossCells });
+  downClues.forEach(d => {
+    const cells = [];
+    for (let i = 0; i < d.word.length; i++) cells.push([d.topRow + i, d.col]);
+    words.push({ number: d.number, direction: "down", cells });
+  });
+  words.sort((a, b) => a.number - b.number);
+  return words;
+}
+function getCurrentWordNumber() {
+  const { direction, selected, downClues, acrossNumber } = crosswordState;
+  if (!selected) return null;
+  if (direction === "across") return acrossNumber;
+  const activeDown = downClues.find(d => d.col === selected.col);
+  return activeDown ? activeDown.number : null;
+}
+// Finds the next word after currentNumber, in clue-number order and wrapping
+// around, that still has at least one empty cell -- and specifically returns
+// its first EMPTY cell, not just its first cell, since some of that word's
+// cells may already be filled from earlier intersections with other words.
+function findNextWordWithEmptyCell(currentNumber) {
+  const words = getAllCrosswordWords();
+  const { entered } = crosswordState;
+  const startIdx = words.findIndex(w => w.number === currentNumber);
+  if (startIdx === -1) return null;
+  for (let i = 1; i <= words.length; i++) {
+    const candidate = words[(startIdx + i) % words.length];
+    const emptyCell = candidate.cells.find(([r, c]) => entered[r][c] === "");
+    if (emptyCell) return { word: candidate, cell: emptyCell };
+  }
+  return null;
 }
 function crosswordAdvance(row, col, delta) {
   // Moves focus one cell forward (delta=1, after typing a letter) or
@@ -1039,10 +1094,29 @@ function crosswordAdvance(row, col, delta) {
   const { compiled, direction } = crosswordState;
   const nextRow = direction === "down" ? row + delta : row;
   const nextCol = direction === "across" ? col + delta : col;
-  if (nextRow < 0 || nextRow >= compiled.height || nextCol < 0 || nextCol >= compiled.width) return;
-  if (compiled.cells[nextRow][nextCol] === null) return;
-  const el = document.getElementById(`cw-input-${nextRow}-${nextCol}`);
-  if (el) el.focus();
+  const inBounds = nextRow >= 0 && nextRow < compiled.height && nextCol >= 0 && nextCol < compiled.width;
+  const isOpenCell = inBounds && compiled.cells[nextRow][nextCol] !== null;
+  if (isOpenCell) {
+    const el = document.getElementById(`cw-input-${nextRow}-${nextCol}`);
+    if (el) el.focus();
+    return;
+  }
+  // Reached the end of the current word. When typing forward specifically,
+  // jump to the next word (by clue number, wrapping around) that still has
+  // an empty cell. Backspacing past the start of a word deliberately does
+  // nothing further -- jumping to a different word on delete would be
+  // surprising, and wasn't what was asked for.
+  if (delta === 1) {
+    const currentNumber = getCurrentWordNumber();
+    if (currentNumber !== null) {
+      const next = findNextWordWithEmptyCell(currentNumber);
+      if (next) {
+        const [nr, nc] = next.cell;
+        const el = document.getElementById(`cw-input-${nr}-${nc}`);
+        if (el) el.focus();
+      }
+    }
+  }
 }
 function crosswordKeyDown(event) {
   if (event.key === "Enter") {
@@ -1110,6 +1184,14 @@ function renderCrossword() {
   const { compiled, downClues, entered, checked, puzzle, revealed, selected } = crosswordState;
   const solved = crosswordIsComplete();
 
+  // The current clue -- whichever one matches the selected cell and typing
+  // direction -- is shown in its own bar directly above the grid. On mobile,
+  // the on-screen keyboard covers the bottom of the screen the moment a cell
+  // is focused, which buries the full clues list below. Keeping the single
+  // relevant clue right above the grid means it stays visible the whole time
+  // the player is actually typing, without needing to scroll past the keyboard.
+  const currentClueText = getCurrentClueText();
+
   let gridHtml = `<div class="cw-grid" style="grid-template-columns: repeat(${compiled.width}, 1fr);">`;
   for (let r = 0; r < compiled.height; r++) {
     for (let c = 0; c < compiled.width; c++) {
@@ -1141,6 +1223,7 @@ function renderCrossword() {
   return `<div class="card">
     <div class="back-link" onclick="restart()">&larr; Dashboard</div>
     ${solvedBanner}
+    <div id="cw-current-clue" class="cw-current-clue">${esc(currentClueText)}</div>
     ${gridHtml}
     <div class="cw-check-row">
       <button class="bee-ctrl-btn" onclick="crosswordCheck()">Check answers</button>
